@@ -1,97 +1,77 @@
-// control_unit.sv
-module control_unit (
-  input  logic [6:0] opcode,
-  input  logic [2:0] funct3,
-  input  logic [6:0] funct7,
-  output logic       reg_write,
-  output logic       mem_to_reg,
-  output logic       mem_read,
-  output logic       mem_write,
-  output logic       branch,
-  output logic       alu_src,    // 1 if second operand is immediate
-  output logic [3:0] alu_ctrl,   // ALU operation
-  output logic       jump
-);
-  // default values
-  always_comb begin
-    reg_write  = 0;
-    mem_to_reg = 0;
-    mem_read   = 0;
-    mem_write  = 0;
-    branch     = 0;
-    alu_src    = 0;
-    alu_ctrl   = 4'h0;
-    jump       = 0;
+/*
+ * Controller Module
+ * This module is responsible for decoding the instruction input for both the ALU and the "main" system.
+ * 
+ * note: the instruction input (32'b) relates the the controller input as follows:
+ *       op_i       ->  intruction[6:0]
+ *       funct3_i   ->  instruction[14:12]
+ *       funct7b5_i ->  instruction[30]
+ */
 
-    case (opcode)
-      7'b0110011: begin // R-type
-        reg_write = 1;
-        alu_src = 0;
-        case ({funct7,funct3})
-          10'b0000000000: alu_ctrl = 4'h0; // ADD
-          10'b0100000000: alu_ctrl = 4'h1; // SUB
-          10'b0000000111: alu_ctrl = 4'h2; // AND
-          10'b0000000110: alu_ctrl = 4'h3; // OR
-          10'b0000000100: alu_ctrl = 4'h4; // XOR
-          10'b0000000001: alu_ctrl = 4'h5; // SLL
-          10'b0000000101: alu_ctrl = 4'h6; // SRL
-          10'b0100000101: alu_ctrl = 4'h7; // SRA
-          10'b0000000010: alu_ctrl = 4'h8; // SLT
-          10'b0000000011: alu_ctrl = 4'h9; // SLTU
-          default: alu_ctrl = 4'h0;
-        endcase
-      end
+module controller(
+  input  logic [6:0] op_i,
+  input  logic [2:0] funct3_i,
+  input  logic       funct7b5_i,
+  output logic       reg_write_o,
+  output logic [1:0] result_src_o,
+  output logic       mem_write_o,
+  output logic       jump_o,
+  output logic       branch_o,
+  output logic [2:0] alu_control_o,
+  output logic       alu_src_o,
+  output logic [1:0] imm_src_o);
 
-      7'b0010011: begin // I-type ALU (ADDI, ANDI,...)
-        reg_write = 1;
-        alu_src = 1;
-        case (funct3)
-          3'b000: alu_ctrl = 4'h0; // ADDI
-          3'b111: alu_ctrl = 4'h2; // ANDI
-          3'b110: alu_ctrl = 4'h3; // ORI
-          3'b100: alu_ctrl = 4'h4; // XORI
-          3'b001: alu_ctrl = 4'h5; // SLLI
-          3'b101: begin
-            if (funct7 == 7'b0000000) alu_ctrl = 4'h6; // SRLI
-            else alu_ctrl = 4'h7; // SRAI
-          end
-          default: alu_ctrl = 4'h0;
-        endcase
-      end
 
-      7'b0000011: begin // LW
-        reg_write = 1;
-        mem_to_reg = 1;
-        mem_read = 1;
-        alu_src = 1;
-        alu_ctrl = 4'h0; // ADD for address calc
-      end
+  // Misc. signals
+  logic [1:0] alu_op;
 
-      7'b0100011: begin // SW
-        mem_write = 1;
-        alu_src = 1;
-        alu_ctrl = 4'h0; // ADD
-      end
+  // Control signal output
+  logic [10:0] controls;
+  // assign {reg_write_o, imm_src_o, alu_src_o, mem_write_o, result_src_o, branch_o, alu_op, jump_o} = controls;
+  assign reg_write_o  = controls[10];
+  assign imm_src_o    = controls[9:8];
+  assign alu_src_o    = controls[7];
+  assign mem_write_o  = controls[6];
+  assign result_src_o = controls[5:4];
+  assign branch_o     = controls[3];
+  assign alu_op       = controls[2:1];
+  assign jump_o       = controls[0];
 
-      7'b1100011: begin // BEQ/BNE/BLT etc. (branch)
-        branch = 1;
-        alu_src = 0;
-        case (funct3)
-          3'b000: alu_ctrl = 4'h1; // SUB (for BEQ)
-          3'b100: alu_ctrl = 4'h8; // SLT (BLT)
-          default: alu_ctrl = 4'h1;
-        endcase
-      end
+  // Main decoder
 
-      7'b1101111: begin // JAL
-        reg_write = 1;
-        jump = 1;
-        alu_src = 0;
-      end
-
-      default: begin
-        // NOP / unsupported
-      end
+  always_comb
+    case(op_i)
+      // reg_write | imm_src | alu_src | mem_write | result_src | branch | alu_op | jump
+      7'b0000011: controls = 11'b1_00_1_0_01_0_00_0;  // (lw) load word
+      7'b0100011: controls = 11'b0_01_1_1_00_0_00_0;  // (sw) store word
+      7'b0110011: controls = 11'b1_xx_0_0_00_0_10_0;  // (R-type) add, sub, and, or, ...  
+      7'b1100011: controls = 11'b0_10_0_0_00_1_01_0;  // (beq) branch equal
+      7'b0010011: controls = 11'b1_00_1_0_00_0_10_0;  // (I-type) immediate
+      7'b1101111: controls = 11'b1_11_0_0_10_0_00_1;  // (jal) jump and link
+      default:    controls = 11'bx_xx_x_x_xx_x_xx_x;  // (invalid)
     endcase
-  end
+
+  // ALU decoder
+
+  // R-type instuction handling
+  logic r_type_sub;
+  assign r_type_sub = funct7b5_i & op_i[5];
+
+  always_comb
+    case(alu_op)
+      2'b00: alu_control_o = 3'b000;         // (add)
+      2'b01: alu_control_o = 3'b001;         // (sub)
+      default: 
+        case(funct3_i)
+          3'b000: if (r_type_sub) 
+                    alu_control_o = 3'b001;  // (sub)
+                  else
+                    alu_control_o = 3'b000;  // (add), (addi)
+          3'b010:   alu_control_o = 3'b101;  // (slt), (slti)    
+          3'b110:   alu_control_o = 3'b011;  // (or), (ori)
+          3'b111:   alu_control_o = 3'b010;  // (and), (andi)
+          default:  alu_control_o = 3'bxxx;  // (invalid)
+        endcase
+    endcase
+
 endmodule
