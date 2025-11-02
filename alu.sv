@@ -1,24 +1,46 @@
 // alu.sv
-module alu (
-  input  logic [31:0] a, b,
-  input  logic [3:0]  alu_ctrl, // control signals
-  output logic [31:0] result,
-  output logic        zero
-);
-  always_comb begin
-    case (alu_ctrl)
-      4'h0: result = a + b;        // ADD / ADDI
-      4'h1: result = a - b;        // SUB
-      4'h2: result = a & b;        // AND
-      4'h3: result = a | b;        // OR
-      4'h4: result = a ^ b;        // XOR
-      4'h5: result = a << b[4:0];  // SLL
-      4'h6: result = a >> b[4:0];  // SRL (logical)
-      4'h7: result = $signed(a) >>> b[4:0]; // SRA (arithmetic)
-      4'h8: result = ($signed(a) < $signed(b)) ? 32'd1 : 32'd0; // SLT
-      4'h9: result = (a < b) ? 32'd1 : 32'd0; // SLTU
-      default: result = 32'd0;
-    endcase
-    zero = (result == 32'd0);
-  end
+/*
+ * ALU Module
+ */ 
+module alu(
+  input  logic [31:0] src_a_i,
+  input  logic [31:0] src_b_i,
+  input  logic [2:0]  alu_control_i,
+  output logic [31:0] result_o,
+  output logic        overflow_o,
+  output logic        carry_o,
+  output logic        negative_o,
+  output logic        zero_o);
+
+ logic [31:0] and_result, or_result, logic_result, adder_result, slt_result;
+ logic [31:0] logic_adder_result;
+ logic carry;
+
+ // AND + OR case
+ assign and_result = src_a_i & src_b_i;
+ assign or_result = src_a_i | src_b_i;
+ assign logic_result = (alu_control_i[0]) ? or_result : and_result;
+
+ // ADD + SUB case
+ assign {carry, adder_result} = (alu_control_i[0]) ? src_a_i - src_b_i : src_a_i + src_b_i;
+
+ // SLT case
+ assign slt_result = {31'b0, overflow_o ^ adder_result[31]};
+
+ // Result
+ assign logic_adder_result = (alu_control_i[1]) ? logic_result : adder_result;
+ assign result_o = (alu_control_i[2]) ? slt_result : logic_adder_result;
+ 
+ // Overflow flag
+ assign overflow_o = (((src_a_i[31] == src_b_i[31]) && (alu_control_i[0] == 0)) || ((src_a_i[31] != src_b_i[31]) && (alu_control_i[0] == 1))) && (src_a_i[31] != adder_result[31]) && ~alu_control_i[1];
+
+ // Carry flag
+ assign carry_o = ~alu_control_i[1] && ~alu_control_i[2] && carry;
+
+ // Negative flag
+ assign negative_o = result_o[31];
+
+ // Zero flag
+ assign zero_o = (32'b0 == result_o);
+
 endmodule
